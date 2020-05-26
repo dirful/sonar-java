@@ -32,6 +32,7 @@ import org.sonar.api.batch.fs.internal.DefaultInputDir;
 import org.sonar.java.AnalyzerMessage;
 import org.sonar.java.AnalyzerMessage.TextSpan;
 import org.sonar.java.EndOfAnalysisCheck;
+import org.sonar.java.RegexCheck;
 import org.sonar.java.SonarComponents;
 import org.sonar.java.TestUtils;
 import org.sonar.plugins.java.api.JavaCheck;
@@ -40,6 +41,8 @@ import org.sonar.plugins.java.api.JavaFileScannerContext.Location;
 import org.sonar.plugins.java.api.SourceMap;
 import org.sonar.plugins.java.api.tree.ClassTree;
 import org.sonar.plugins.java.api.tree.CompilationUnitTree;
+import org.sonar.plugins.java.api.tree.LiteralTree;
+import org.sonar.plugins.java.api.tree.SyntaxToken;
 import org.sonar.plugins.java.api.tree.Tree;
 import org.sonar.plugins.java.api.tree.VariableTree;
 
@@ -160,7 +163,7 @@ class DefaultJavaFileScannerContextTest {
     assertThat(reportedMessage.getCost()).isNull();
     assertThat(reportedMessage.flows).isEmpty();
 
-    assertMessagePosition(reportedMessage, 1, 0, 4, 1);
+    assertMessagePosition(reportedMessage, 1, 0, 5, 1);
   }
 
   @Test
@@ -179,7 +182,7 @@ class DefaultJavaFileScannerContextTest {
     assertThat(reportedMessage.getCost()).isNull();
     assertThat(reportedMessage.flows).isEmpty();
 
-    assertMessagePosition(reportedMessage, 1, 0, 4, 1);
+    assertMessagePosition(reportedMessage, 1, 0, 5, 1);
   }
 
   @Test
@@ -251,6 +254,91 @@ class DefaultJavaFileScannerContextTest {
     assertThat(reportedMessage.flows).isEmpty();
 
     assertMessagePosition(reportedMessage, 2, 6, 3, 10);
+  }
+
+  @Test
+  void report_issue_on_regex_tree() {
+    ClassTree c = (ClassTree) compilationUnitTree.types().get(0);
+    VariableTree v = (VariableTree) c.members().get(2);
+    LiteralTree s = (LiteralTree) v.initializer();
+
+    RegexCheck regexCheck = new RegexCheck() {};
+    int cost = 42;
+
+    RegexCheck.RegexTree tree = new RegexCheck.RegexTree() {
+      @Override
+      public TextSpan location() {
+        SyntaxToken t = s.token();
+        return new AnalyzerMessage.TextSpan(t.line(), t.column(), t.line(), t.column() + (t.text().length() / 2));
+      }
+    };
+
+    context.reportIssue(regexCheck, tree, "regexMsg", cost, Collections.emptyList());
+
+    assertThat(reportedMessage.getMessage()).isEqualTo("regexMsg");
+    assertThat(reportedMessage.getCost()).isEqualTo(Double.valueOf(cost));
+    assertThat(reportedMessage.flows).isEmpty();
+
+    assertMessagePosition(reportedMessage, 4, 13, 4, 27);
+  }
+
+  @Test
+  void report_issue_on_regex_tree_with_secondary() {
+    ClassTree c = (ClassTree) compilationUnitTree.types().get(0);
+    VariableTree v = (VariableTree) c.members().get(2);
+    LiteralTree s = (LiteralTree) v.initializer();
+
+    SyntaxToken t = s.token();
+    int line = t.line();
+    int length = t.text().length();
+    int quarter = length / 4;
+
+    RegexCheck regexCheck = new RegexCheck() {};
+
+    RegexCheck.RegexTree tree1 = new RegexCheck.RegexTree() {
+      @Override
+      public TextSpan location() {
+        int startCharacter = t.column();
+        int endCharacter = startCharacter + quarter;
+        return new AnalyzerMessage.TextSpan(line, startCharacter, line, endCharacter);
+      }
+    };
+
+    RegexCheck.RegexTree tree2 = new RegexCheck.RegexTree() {
+      @Override
+      public TextSpan location() {
+        int endCharacter = t.column() + length;
+        int startCharacter = endCharacter - quarter;
+        return new AnalyzerMessage.TextSpan(line, startCharacter, line, endCharacter);
+      }
+    };
+
+    RegexCheck.IssueLocation secondary = new RegexCheck.IssueLocation() {
+      @Override
+      public RegexCheck.RegexTree tree() {
+        return tree2;
+      }
+
+      @Override
+      public String message() {
+        return "regexSecondary";
+      }
+    };
+
+    context.reportIssue(regexCheck, tree1, "regexMsg", null, Collections.singletonList(secondary));
+
+    assertThat(reportedMessage.getMessage()).isEqualTo("regexMsg");
+    assertThat(reportedMessage.getCost()).isNull();
+    assertMessagePosition(reportedMessage, 4, 13, 4, 20);
+
+    assertThat(reportedMessage.flows).hasSize(1);
+    List<AnalyzerMessage> reportedSecondaries = reportedMessage.flows.get(0);
+    assertThat(reportedSecondaries).hasSize(1);
+
+    AnalyzerMessage reportedSecondary = reportedSecondaries.get(0);
+    assertThat(reportedSecondary.getMessage()).isEqualTo("regexSecondary");
+    assertThat(reportedSecondary.getCost()).isNull();
+    assertMessagePosition(reportedSecondary, 4, 34, 4, 41);
   }
 
   @Test

@@ -1,4 +1,5 @@
 class A {
   int a = 42;
-  long b = 42L; 
+  long b = 42L;
+  String s = "abcdefghijklmnopqrstuvwxyz";
 }

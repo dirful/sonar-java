@@ -19,17 +19,19 @@
  */
 package org.sonar.java.model;
 
+import com.google.common.annotations.Beta;
 import java.io.File;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 import org.sonar.api.batch.fs.InputComponent;
 import org.sonar.api.batch.fs.InputFile;
 import org.sonar.java.AnalyzerMessage;
 import org.sonar.java.EndOfAnalysisCheck;
+import org.sonar.java.RegexCheck;
 import org.sonar.java.SonarComponents;
 import org.sonar.java.ast.visitors.ComplexityVisitor;
 import org.sonar.plugins.java.api.JavaCheck;
@@ -118,6 +120,17 @@ public class DefaultJavaFileScannerContext implements JavaFileScannerContext {
     reportIssue(javaCheck, tree, message, Collections.emptyList(), null);
   }
 
+  /**
+   * Experimental feature to report from a RegexCheck
+   */
+  @Beta
+  public void reportIssue(RegexCheck regexCheck, RegexCheck.RegexTree regexTree, String message, @Nullable Integer cost, List<RegexCheck.IssueLocation> secondaries) {
+    AnalyzerMessage analyzerMessage = new AnalyzerMessage(regexCheck, inputFile, regexTree.location(), message, cost != null ? cost : 0);
+    List<List<RegexCheck.IssueLocation>> flows = secondaries.stream().map(Collections::singletonList).collect(Collectors.toList());
+    completeAnalyzerMessageWithFlows(analyzerMessage, flows, loc -> loc.tree().location(), RegexCheck.IssueLocation::message);
+    reportIssue(analyzerMessage);
+  }
+
   @Override
   public void reportIssue(JavaCheck javaCheck, Tree syntaxNode, String message, List<Location> secondary, @Nullable Integer cost) {
     List<List<Location>> flows = secondary.stream().map(Collections::singletonList).collect(Collectors.toList());
@@ -159,19 +172,33 @@ public class DefaultJavaFileScannerContext implements JavaFileScannerContext {
   }
 
   public AnalyzerMessage createAnalyzerMessage(JavaCheck javaCheck, Tree startTree, String message) {
-    return createAnalyzerMessage(inputFile, javaCheck, startTree, null, message, new ArrayList<>(), null);
+    return createAnalyzerMessage(inputFile, javaCheck, startTree, null, message, Collections.emptyList(), null);
   }
 
   protected static AnalyzerMessage createAnalyzerMessage(InputFile inputFile, JavaCheck javaCheck, Tree startTree, @Nullable Tree endTree, String message,
     Iterable<List<Location>> flows, @Nullable Integer cost) {
-    AnalyzerMessage.TextSpan textSpan = endTree != null ? AnalyzerMessage.textSpanBetween(startTree, endTree) : AnalyzerMessage.textSpanFor(startTree);
-    AnalyzerMessage analyzerMessage = new AnalyzerMessage(javaCheck, inputFile, textSpan, message, cost != null ? cost : 0);
-    for (List<Location> flow : flows) {
-      List<AnalyzerMessage> sonarqubeFlow =
-      flow.stream().map(l -> new AnalyzerMessage(javaCheck, inputFile, AnalyzerMessage.textSpanFor(l.syntaxNode), l.msg, 0)).collect(Collectors.toList());
+
+    AnalyzerMessage.TextSpan location = endTree != null ? AnalyzerMessage.textSpanBetween(startTree, endTree) : AnalyzerMessage.textSpanFor(startTree);
+    AnalyzerMessage analyzerMessage = new AnalyzerMessage(javaCheck, inputFile, location, message, cost != null ? cost : 0);
+    completeAnalyzerMessageWithFlows(analyzerMessage, flows, loc -> AnalyzerMessage.textSpanFor(loc.syntaxNode), loc -> loc.msg);
+    return analyzerMessage;
+  }
+
+  private static <L> void completeAnalyzerMessageWithFlows(
+    AnalyzerMessage analyzerMessage,
+    Iterable<List<L>> flows,
+    Function<L, AnalyzerMessage.TextSpan> flowItemLocationProdivder,
+    Function<L, String> flowItemMessageProvider) {
+
+    JavaCheck check = analyzerMessage.getCheck();
+    InputComponent component = analyzerMessage.getInputComponent();
+
+    for (List<L> flow : flows) {
+      List<AnalyzerMessage> sonarqubeFlow = flow.stream()
+        .map(l -> new AnalyzerMessage(check, component, flowItemLocationProdivder.apply(l), flowItemMessageProvider.apply(l),0))
+        .collect(Collectors.toList());
       analyzerMessage.flows.add(sonarqubeFlow);
     }
-    return analyzerMessage;
   }
 
   @Override
